@@ -3,7 +3,9 @@ package main
 import (
 	"encoding/json"
 	"fmt"
-  // "io"
+	"strconv"
+
+	// "io"
 	"log"
 	"net/http"
 	"strings"
@@ -38,6 +40,50 @@ func (ch *chirpyHandler) ServeMetrics(w http.ResponseWriter, r *http.Request) {
 
 	w.Write([]byte(metricsPage))
 }
+
+func (ch *chirpyHandler) getChirps(w http.ResponseWriter, r *http.Request){
+  w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+  w.WriteHeader(http.StatusOK)
+  
+  allchirps, err := ch.chirpDatabase.GetChirps()  
+  if err != nil {
+    log.Printf("Couldn't get chirps: %s", err)
+  }
+
+  data, err := json.Marshal(allchirps)
+  if err != nil{
+    log.Printf("Couldn't get chirps: %s", err)
+  }
+ // fmt.Println(r.URL.Path)
+  w.Write(data)
+}
+
+func (ch *chirpyHandler) getChirpsWithID(w http.ResponseWriter, r *http.Request){
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8") // normal header
+  pathSlice := strings.Split(r.URL.Path, "/")
+  id, err := strconv.Atoi(pathSlice[len(pathSlice)-1])
+  if err != nil {
+    log.Printf("Could not parse ID")
+    w.WriteHeader(http.StatusNotFound)
+    return
+  }
+  targetChirp, err := ch.chirpDatabase.GetChirpByID(id)
+  if err != nil {
+    log.Printf("Could not find chirp with ID: %v", id)
+    w.WriteHeader(http.StatusNotFound)
+    return
+  }
+  data, err := json.Marshal(targetChirp)
+  if err != nil {
+    log.Printf("Error marshalling JSON: %s", err)
+    w.WriteHeader(http.StatusInternalServerError)
+    return
+  }
+
+  w.WriteHeader(http.StatusOK)
+  w.Write(data)
+}
+
 
 func (ch *chirpyHandler) ResetMetrics(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8") // normal header
@@ -143,6 +189,33 @@ func (ch *chirpyHandler) postChirps(w http.ResponseWriter, r *http.Request){
 }
 
 
+func (ch *chirpyHandler) postUsers(w http.ResponseWriter, r *http.Request){
+
+  type tempUser struct {
+    Email string `json:"email"`
+  }
+
+  dec := json.NewDecoder(r.Body)
+  newUser := tempUser{}
+  err := dec.Decode(&newUser)
+
+  if err != nil {
+    log.Fatalf("Could not parse json %s", err)
+    return
+  }
+
+  // here we create the user and add to db
+  validUser, err := ch.chirpDatabase.CreateUser(newUser.Email)
+  if err != nil {
+    respondWithError(w, http.StatusInternalServerError,"Something went wrong creating User")
+    return
+  }
+ 
+  respondWithJson(w, http.StatusCreated, validUser)
+
+}
+
+
 
 func (ch *chirpyHandler) middlewareMetricsInc(next http.Handler) http.Handler {
   return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request){
@@ -158,8 +231,7 @@ func main() {
 	mux := http.NewServeMux()
   
 
-  // TODO
-  // Checks for file
+  // Starts Database
   dbConnection, err := internal.NewDB("./database.json")
   if err != nil {
     log.Fatalf("CANT LOAD FILE: %v\n", err)
@@ -182,7 +254,9 @@ func main() {
 	mux.HandleFunc("GET /admin/metrics", ch.ServeMetrics)
 	mux.HandleFunc("/api/reset", ch.ResetMetrics)
 	mux.HandleFunc("POST /api/chirps", ch.postChirps)
-
+	mux.HandleFunc("GET /api/chirps", ch.getChirps)
+	mux.HandleFunc("GET /api/chirps/{id}", ch.getChirpsWithID)
+  mux.HandleFunc("POST /api/users", ch.postUsers)
 
 	port := "8080"
 
@@ -191,6 +265,14 @@ func main() {
 		Handler: mux,
 	}
 
+  // TODO 2024/06/25
+  // We need to create an API endpoint to handle users
+  // The easiest way to process this would be to have completely seperate functions to handle writing to the database
+  // 1. create User Struct
+  // 2. Add a users map to DbStructure
+  // 3. Write to file using a createEmail and WriteEmail func
+  // 4. Have DBStructure written to file
+  // The harder way would be to consolidate this into generic functions, so posting Chirps and Users use the same functions
 
   
 
