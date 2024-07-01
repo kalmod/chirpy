@@ -7,7 +7,10 @@ import (
 	"io/fs"
 	"os"
 	"sort"
+	"strings"
 	"sync"
+
+	bcrypt "golang.org/x/crypto/bcrypt"
 )
 
 var GlobalChirpID int = 0
@@ -139,9 +142,15 @@ func (db *DB) CreateChirp(body string) (Chirp, error) {
 	return officialChirp, nil
 }
 
-func (db *DB) CreateUser(body string) (User, error) {
+func (db *DB) CreateUser(password, body string) (User, error) {
 	GlobalUserID++
-	officialUser := User{ID: GlobalUserID, Email: body}
+
+  hashedPassword, err := bcrypt.GenerateFromPassword([]byte(password),1)
+  if err != nil {
+    return User{}, err
+  }
+
+	officialUser := User{ID: GlobalUserID, Password: string(hashedPassword), Email: body}
 
 	loadedDBData, err := db.loadDB()
 	if err != nil {
@@ -159,11 +168,45 @@ func (db *DB) writeDB(dbstructure DBStructure) error {
 		fmt.Println("mrshl err", j)
 		return err
 	}
-
+  
+  db.mux.Lock()
 	err = os.WriteFile(db.path, j, 0644)
 	if err != nil {
 		return err
 	}
+  defer db.mux.Unlock()
 
 	return nil
+}
+
+
+func (db *DB) CheckIfEmailExists(email string) (int, bool) {
+  loadedDBData, err := db.loadDB()
+  if err != nil {
+    return -1, false
+  }
+  
+  for _, user := range loadedDBData.Users {
+    emailInDb := strings.ToLower(user.Email)
+    if emailInDb == email {
+      return user.ID, true
+    }
+  }
+  
+  return -1, false
+}
+
+func (db *DB) CheckPasswordMatch(id int, password string) (User, error) {
+  loadedDBData, err := db.loadDB()
+  if err != nil {
+    return  User{}, err
+  }
+  dbUser := loadedDBData.Users[id]
+
+  err = bcrypt.CompareHashAndPassword([]byte(dbUser.Password), []byte(password))
+  if err != nil {
+    return User{}, err
+  }
+
+  return dbUser, nil
 }
