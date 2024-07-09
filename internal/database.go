@@ -27,7 +27,7 @@ type DB struct {
 type DBStructure struct {
 	Chirps        map[int]Chirp        `json:"chirps"`
 	Users         map[int]User         `json:"users"`
-	RefreshTokens map[string]time.Time `json:"refresh_tokens"`
+	RefreshTokens map[string]RefreshTokenInfo `json:"refresh_tokens"`
 }
 
 func (db *DB) PrintPath() string {
@@ -71,7 +71,7 @@ func (db *DB) loadDB() (DBStructure, error) {
 	loadedData := DBStructure{
 		make(map[int]Chirp),
 		make(map[int]User),
-		make(map[string]time.Time),
+		make(map[string]RefreshTokenInfo),
 	}
 
 	var wg sync.WaitGroup
@@ -152,9 +152,9 @@ func (db *DB) GetChirpByID(id int) (Chirp, error) {
 	return targetChirp, nil
 }
 
-func (db *DB) CreateChirp(body string) (Chirp, error) {
+func (db *DB) CreateChirp(body string, userID int) (Chirp, error) {
 	GlobalChirpID++
-	officialChirp := Chirp{ID: GlobalChirpID, Body: body}
+	officialChirp := Chirp{ID: GlobalChirpID, Body: body, AuthorID: userID}
 
 	loadedDBData, err := db.loadDB()
 	if err != nil {
@@ -260,7 +260,7 @@ func (db *DB) UpdateUsers(userID int, newUserInfo User) (User, error) {
 	return newUserInfo, nil
 }
 
-func (db *DB) CreateRefreshToken() (string, error) {
+func (db *DB) CreateRefreshToken(userID int) (string, error) {
 	b := make([]byte, 32)
 	_, err := rand.Read(b)
 	if err != nil {
@@ -274,22 +274,22 @@ func (db *DB) CreateRefreshToken() (string, error) {
     return "",nil
 	}
 
-  loadedData.RefreshTokens[encodedStr] = expirationDate
+  loadedData.RefreshTokens[encodedStr] = RefreshTokenInfo{ID: userID, ExpirationDate: expirationDate}
   db.writeDB(loadedData)
 
 	return encodedStr, nil
 }
 
-func (db *DB) CheckRefreshToken(refreshToken string) ( error ) {
+func (db *DB) CheckRefreshToken(refreshToken string) ( RefreshTokenInfo,error ) {
   loadedData, err := db.loadDB()
   if err != nil {
-    return err
+    return RefreshTokenInfo{}, err
   }
 
-  if _, ok := loadedData.RefreshTokens[refreshToken]; ok {
-    return nil
+  if refreshInfo, ok := loadedData.RefreshTokens[refreshToken]; ok {
+    return refreshInfo,nil
   }
-  return errors.New("Refresh Token not found")
+  return RefreshTokenInfo{},errors.New("Refresh Token not found")
 }
 
 
@@ -309,4 +309,3 @@ func (db *DB) RevokeRefreshToken(refreshToken string) (error) {
   db.writeDB(loadedData)
   return nil
 }
-

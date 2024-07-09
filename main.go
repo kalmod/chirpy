@@ -167,6 +167,22 @@ func (ch *chirpyHandler) postChirps(w http.ResponseWriter, r *http.Request) {
 	type tempChirp struct {
 		Body string `json:"body"`
 	}
+
+	type customClaims struct {
+		ch string
+		jwt.RegisteredClaims
+	}
+
+	tokenString := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+	// TODO Try to understand what's occuring in this return statement
+	token, token_err := jwt.ParseWithClaims(tokenString, &customClaims{}, func(token *jwt.Token) (interface{}, error) {
+		return []byte(ch.JWTSECRET), nil
+	})
+	if token_err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Invalid JWT")
+		return
+	}
+
 	dec := json.NewDecoder(r.Body)
 	newChirp := tempChirp{}
 	err := dec.Decode(&newChirp)
@@ -181,7 +197,17 @@ func (ch *chirpyHandler) postChirps(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	validChirp, err := ch.chirpDatabase.CreateChirp(profanityCheck(newChirp.Body))
+	userIDString, err := token.Claims.GetSubject()
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Could not get UserID from JWT")
+	}
+  userID, err := strconv.Atoi(userIDString)
+  if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Could not get UserID from JWT")
+  }
+
+
+	validChirp, err := ch.chirpDatabase.CreateChirp(profanityCheck(newChirp.Body), userID)
 	if err != nil {
 		respondWithError(w, http.StatusInternalServerError, "Something went wrong")
 		return
@@ -232,13 +258,13 @@ func (ch *chirpyHandler) postLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ss, err := ch.CreateJWT(userRequestData.Expires_in_seconds, validUser)
+	ss, err := ch.CreateJWT(validUser.ID)
 	if err != nil {
 		respondWithError(w, http.StatusInternalServerError, "Could not create JWT")
 		return
 	}
 
-	refreshToken, err := ch.chirpDatabase.CreateRefreshToken()
+	refreshToken, err := ch.chirpDatabase.CreateRefreshToken(validUser.ID)
 	if err != nil {
 		respondWithError(w, http.StatusInternalServerError, "Could not create Refresh Token")
 		return
@@ -257,8 +283,8 @@ func (ch *chirpyHandler) postLogin(w http.ResponseWriter, r *http.Request) {
 	return
 }
 
-func (ch *chirpyHandler) CreateJWT(expiredSeconds int, user internal.User) (string, error) {
-	fmt.Println("CREATING JWT")
+func (ch *chirpyHandler) CreateJWT(userID int) (string, error) {
+	// fmt.Println("CREATING JWT")
 	defaultExpiredTime := time.Duration(3600)
 
 	claims := struct {
@@ -270,7 +296,7 @@ func (ch *chirpyHandler) CreateJWT(expiredSeconds int, user internal.User) (stri
 			Issuer:    "chirpy",
 			IssuedAt:  jwt.NewNumericDate(time.Now().UTC()),
 			ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Second * defaultExpiredTime).UTC()),
-			Subject:   strconv.Itoa(user.ID),
+			Subject:   strconv.Itoa(userID),
 		},
 	}
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
@@ -370,9 +396,15 @@ func (ch *chirpyHandler) middlewareMetricsInc(next http.Handler) http.Handler {
 func (ch *chirpyHandler) postCheckRefreshToken(w http.ResponseWriter, r *http.Request) {
 	refreshTokenString := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
 
-	err := ch.chirpDatabase.CheckRefreshToken(refreshTokenString)
+	refreshTokenInfo, err := ch.chirpDatabase.CheckRefreshToken(refreshTokenString)
 	if err != nil {
 		respondWithError(w, http.StatusUnauthorized, "Invalid Refresh Token")
+		return
+	}
+
+	ss, err := ch.CreateJWT(refreshTokenInfo.ID)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Could not create JWT")
 		return
 	}
 
@@ -380,7 +412,7 @@ func (ch *chirpyHandler) postCheckRefreshToken(w http.ResponseWriter, r *http.Re
 		struct {
 			Token string `json:"token"`
 		}{
-			refreshTokenString,
+			ss,
 		})
 	return
 }
@@ -388,14 +420,14 @@ func (ch *chirpyHandler) postCheckRefreshToken(w http.ResponseWriter, r *http.Re
 func (ch *chirpyHandler) postRevokeRefreshToken(w http.ResponseWriter, r *http.Request) {
 	refreshTokenString := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
 
-  err := ch.chirpDatabase.RevokeRefreshToken(refreshTokenString)
+	err := ch.chirpDatabase.RevokeRefreshToken(refreshTokenString)
 	if err != nil {
 		respondWithError(w, http.StatusUnauthorized, "Invalid Refresh Token")
 		return
 	}
 
-  respondWithJson(w, http.StatusNoContent,"Revoked Refresh Token")
-  return
+	respondWithJson(w, http.StatusNoContent, "Revoked Refresh Token")
+	return
 }
 
 func main() {
@@ -432,11 +464,11 @@ func main() {
 	mux.HandleFunc("POST /api/chirps", ch.postChirps)
 	mux.HandleFunc("GET /api/chirps", ch.getChirps)
 	mux.HandleFunc("GET /api/chirps/{id}", ch.getChirpsWithID)
-	mux.HandleFunc("POST /api/users", ch.postUsers)  //Create User
-	mux.HandleFunc("POST /api/login", ch.postLogin)  //Log in + Creates JWT
-	mux.HandleFunc("PUT /api/users", ch.updateUsers) //Update User
-	mux.HandleFunc("POST /api/refresh", ch.postCheckRefreshToken)
-	mux.HandleFunc("POST /api/revoke", ch.postRevokeRefreshToken)
+	mux.HandleFunc("POST /api/users", ch.postUsers)               //Create User
+	mux.HandleFunc("POST /api/login", ch.postLogin)               //Log in + Creates JWT
+	mux.HandleFunc("PUT /api/users", ch.updateUsers)              //Update User
+	mux.HandleFunc("POST /api/refresh", ch.postCheckRefreshToken) // vaidate refreshtoken
+	mux.HandleFunc("POST /api/revoke", ch.postRevokeRefreshToken) // remove refreshtoken
 	port := "8080"
 
 	server := &http.Server{
