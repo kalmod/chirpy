@@ -25,8 +25,8 @@ type DB struct {
 }
 
 type DBStructure struct {
-	Chirps        map[int]Chirp        `json:"chirps"`
-	Users         map[int]User         `json:"users"`
+	Chirps        map[int]Chirp               `json:"chirps"`
+	Users         map[int]User                `json:"users"`
 	RefreshTokens map[string]RefreshTokenInfo `json:"refresh_tokens"`
 }
 
@@ -259,6 +259,22 @@ func (db *DB) UpdateUsers(userID int, newUserInfo User) (User, error) {
 
 	return newUserInfo, nil
 }
+func (db *DB) UpgradeUser(userID int) error {
+	loadedDBData, err := db.loadDB()
+	if err != nil {
+		return err
+	}
+
+  userInfo, ok := loadedDBData.Users[userID]
+  if !ok {
+    return errors.New("User Not found")
+  }
+	userInfo.Is_Chirpy_Red = true
+	loadedDBData.Users[userID] = userInfo
+
+	db.writeDB(loadedDBData)
+	return nil
+}
 
 func (db *DB) CreateRefreshToken(userID int) (string, error) {
 	b := make([]byte, 32)
@@ -271,41 +287,60 @@ func (db *DB) CreateRefreshToken(userID int) (string, error) {
 	expirationDate := time.Now().UTC().AddDate(0, 0, 60)
 	loadedData, err := db.loadDB()
 	if err != nil {
-    return "",nil
+		return "", nil
 	}
 
-  loadedData.RefreshTokens[encodedStr] = RefreshTokenInfo{ID: userID, ExpirationDate: expirationDate}
-  db.writeDB(loadedData)
+	loadedData.RefreshTokens[encodedStr] = RefreshTokenInfo{ID: userID, ExpirationDate: expirationDate}
+	db.writeDB(loadedData)
 
 	return encodedStr, nil
 }
 
-func (db *DB) CheckRefreshToken(refreshToken string) ( RefreshTokenInfo,error ) {
-  loadedData, err := db.loadDB()
-  if err != nil {
-    return RefreshTokenInfo{}, err
-  }
+func (db *DB) CheckRefreshToken(refreshToken string) (RefreshTokenInfo, error) {
+	loadedData, err := db.loadDB()
+	if err != nil {
+		return RefreshTokenInfo{}, err
+	}
 
-  if refreshInfo, ok := loadedData.RefreshTokens[refreshToken]; ok {
-    return refreshInfo,nil
-  }
-  return RefreshTokenInfo{},errors.New("Refresh Token not found")
+	if refreshInfo, ok := loadedData.RefreshTokens[refreshToken]; ok {
+		return refreshInfo, nil
+	}
+	return RefreshTokenInfo{}, errors.New("Refresh Token not found")
 }
 
+func (db *DB) RevokeRefreshToken(refreshToken string) error {
+	loadedData, err := db.loadDB()
+	if err != nil {
+		return err
+	}
 
-func (db *DB) RevokeRefreshToken(refreshToken string) (error) {
-  loadedData, err := db.loadDB()
-  if err != nil {
-    return err
-  }
+	_, ok := loadedData.RefreshTokens[refreshToken]
+	if ok {
+		delete(loadedData.RefreshTokens, refreshToken)
+	} else {
+		return errors.New("Refresh Token not found")
+	}
 
-  _, ok := loadedData.RefreshTokens[refreshToken]
-  if ok {
-    delete(loadedData.RefreshTokens, refreshToken)
-  } else {
-    return errors.New("Refresh Token not found")
-  }
+	db.writeDB(loadedData)
+	return nil
+}
 
-  db.writeDB(loadedData)
-  return nil
+func (db *DB) DeleteChirpsWithID(userID, chirpID int) error {
+	loadedData, err := db.loadDB()
+	if err != nil {
+		return err
+	}
+
+	val, ok := loadedData.Chirps[chirpID]
+	if !ok {
+		return errors.New("No chirp found with given ID")
+	}
+
+	if userID != val.AuthorID {
+		return errors.New("Not author of chirp")
+	}
+
+	delete(loadedData.Chirps, chirpID)
+	db.writeDB(loadedData)
+	return nil
 }

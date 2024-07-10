@@ -24,6 +24,7 @@ type chirpyHandler struct {
 	fileserverHits int
 	chirpDatabase  *internal.DB
 	JWTSECRET      string
+	POLKAKEY       string
 }
 
 func (ch *chirpyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -66,18 +67,21 @@ func (ch *chirpyHandler) getChirps(w http.ResponseWriter, r *http.Request) {
 func (ch *chirpyHandler) getChirpsWithID(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8") // normal header
 	pathSlice := strings.Split(r.URL.Path, "/")
+
 	id, err := strconv.Atoi(pathSlice[len(pathSlice)-1])
 	if err != nil {
 		log.Printf("Could not parse ID")
 		w.WriteHeader(http.StatusNotFound)
 		return
 	}
+
 	targetChirp, err := ch.chirpDatabase.GetChirpByID(id)
 	if err != nil {
 		log.Printf("Could not find chirp with ID: %v", id)
 		w.WriteHeader(http.StatusNotFound)
 		return
 	}
+
 	data, err := json.Marshal(targetChirp)
 	if err != nil {
 		log.Printf("Error marshalling JSON: %s", err)
@@ -161,6 +165,61 @@ func (ch *chirpyHandler) ValidateChirp(w http.ResponseWriter, r *http.Request) {
 	respondWithJson(w, http.StatusOK, cleaned_chirp)
 }
 
+func (ch *chirpyHandler) deleteChrips(w http.ResponseWriter, r *http.Request) {
+
+	type customClaims struct {
+		ch string
+		jwt.RegisteredClaims
+	}
+
+	// GETS CHIRP ID
+	pathSlice := strings.Split(r.URL.Path, "/")
+	chirpID, err := strconv.Atoi(pathSlice[len(pathSlice)-1])
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Couldn't get Chirp ID")
+		return
+	}
+
+	tokenString := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+	// TODO Try to understand what's occuring in this return statement
+	token, token_err := jwt.ParseWithClaims(tokenString, &customClaims{}, func(token *jwt.Token) (interface{}, error) {
+		return []byte(ch.JWTSECRET), nil
+	})
+	if token_err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Invalid JWT")
+		return
+	}
+
+	userID, err := getUserIDFromToken(token)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Couldn't parse UserID")
+		return
+	}
+
+	err = ch.chirpDatabase.DeleteChirpsWithID(userID, chirpID)
+	if err != nil {
+		respondWithError(w, http.StatusForbidden, "Not authorized to delete chirp")
+		return
+	}
+
+	respondWithJson(w, http.StatusNoContent, "Chirp Deleted")
+	return
+}
+
+func getUserIDFromToken(token *jwt.Token) (int, error) {
+	tokenUserID, err := token.Claims.GetSubject()
+	if err != nil {
+		return -1, err
+	}
+
+	convertedUserId, err := strconv.Atoi(tokenUserID)
+	if err != nil {
+		return -1, err
+	}
+
+	return convertedUserId, nil
+}
+
 // We'll want get the data and validate it before creating the chirp
 func (ch *chirpyHandler) postChirps(w http.ResponseWriter, r *http.Request) {
 
@@ -201,11 +260,10 @@ func (ch *chirpyHandler) postChirps(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		respondWithError(w, http.StatusInternalServerError, "Could not get UserID from JWT")
 	}
-  userID, err := strconv.Atoi(userIDString)
-  if err != nil {
+	userID, err := strconv.Atoi(userIDString)
+	if err != nil {
 		respondWithError(w, http.StatusInternalServerError, "Could not get UserID from JWT")
-  }
-
+	}
 
 	validChirp, err := ch.chirpDatabase.CreateChirp(profanityCheck(newChirp.Body), userID)
 	if err != nil {
@@ -235,10 +293,11 @@ func (ch *chirpyHandler) postUsers(w http.ResponseWriter, r *http.Request) {
 
 	respondWithJson(w, http.StatusCreated,
 		struct {
-			ID    int    `json:"id"`
-			Email string `json:"email"`
+			ID            int    `json:"id"`
+			Email         string `json:"email"`
+			Is_Chirpy_Red bool   `json:"is_chirpy_red"`
 		}{
-			validUser.ID, validUser.Email,
+			validUser.ID, validUser.Email, validUser.Is_Chirpy_Red,
 		})
 }
 
@@ -272,12 +331,13 @@ func (ch *chirpyHandler) postLogin(w http.ResponseWriter, r *http.Request) {
 
 	respondWithJson(w, http.StatusOK,
 		struct {
-			ID           int    `json:"id"`
-			Email        string `json:"email"`
-			Token        string `json:"token"`
-			RefreshToken string `json:"refresh_token"`
+			ID            int    `json:"id"`
+			Email         string `json:"email"`
+			Token         string `json:"token"`
+			RefreshToken  string `json:"refresh_token"`
+			Is_Chirpy_Red bool   `json:"is_chirpy_red"`
 		}{
-			validUser.ID, validUser.Email, ss, refreshToken,
+			validUser.ID, validUser.Email, ss, refreshToken, validUser.Is_Chirpy_Red,
 		})
 
 	return
@@ -324,12 +384,10 @@ func handlePasswordUser(r *http.Request) internal.PasswordUser {
 }
 
 func (ch *chirpyHandler) updateUsers(w http.ResponseWriter, r *http.Request) {
-
 	// type simpleUser struct {
 	// 	Email    string `json:"email"`
 	// 	Password string `json:"password"`
 	// }
-
 	type customClaims struct {
 		ch string
 		jwt.RegisteredClaims
@@ -376,10 +434,11 @@ func (ch *chirpyHandler) updateUsers(w http.ResponseWriter, r *http.Request) {
 
 	respondWithJson(w, http.StatusOK,
 		struct {
-			ID    int    `json:"id"`
-			Email string `json:"email"`
+			ID            int    `json:"id"`
+			Email         string `json:"email"`
+			Is_Chirpy_Red bool   `json:"is_chirpy_red"`
 		}{
-			validUser.ID, validUser.Email,
+			validUser.ID, validUser.Email, validUser.Is_Chirpy_Red,
 		})
 
 	return
@@ -430,10 +489,41 @@ func (ch *chirpyHandler) postRevokeRefreshToken(w http.ResponseWriter, r *http.R
 	return
 }
 
+func (ch *chirpyHandler) postPolkaWebHookHandler(w http.ResponseWriter, r *http.Request) {
+
+	apiKey := strings.TrimPrefix(r.Header.Get("Authorization"), "ApiKey ")
+  if apiKey != ch.POLKAKEY{
+    respondWithError(w, http.StatusUnauthorized,"Unauthorized acccess.")
+    return
+  }
+
+	dec := json.NewDecoder(r.Body)
+	eventStruct := internal.Event_Polka{}
+	err := dec.Decode(&eventStruct)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Something went wrong")
+		return
+	}
+
+	if eventStruct.Event != "user.upgraded" {
+		respondWithError(w, http.StatusNoContent, "")
+		return
+	}
+	err = ch.chirpDatabase.UpgradeUser(eventStruct.Data.UserID)
+	if err != nil {
+		respondWithError(w, http.StatusNotFound, fmt.Sprint(err))
+		return
+	}
+
+	respondWithJson(w, http.StatusNoContent, "")
+	return
+}
+
 func main() {
 
 	godotenv.Load()
 	jwtSecret := os.Getenv("JWT_SECRET")
+	polkaKey := os.Getenv("POLKA_KEY")
 
 	// dbg is a pointer to a boolean val
 	dbg := flag.Bool("debug", false, "Enable debug mode")
@@ -453,7 +543,7 @@ func main() {
 	}
 
 	// SERVER CONFIG
-	ch := chirpyHandler{"OK", 0, dbConnection, jwtSecret}
+	ch := chirpyHandler{"OK", 0, dbConnection, jwtSecret, polkaKey}
 
 	mux.Handle("/app/*",
 		http.StripPrefix("/app/", ch.middlewareMetricsInc(http.FileServer(http.Dir(".")))),
@@ -464,11 +554,13 @@ func main() {
 	mux.HandleFunc("POST /api/chirps", ch.postChirps)
 	mux.HandleFunc("GET /api/chirps", ch.getChirps)
 	mux.HandleFunc("GET /api/chirps/{id}", ch.getChirpsWithID)
-	mux.HandleFunc("POST /api/users", ch.postUsers)               //Create User
-	mux.HandleFunc("POST /api/login", ch.postLogin)               //Log in + Creates JWT
-	mux.HandleFunc("PUT /api/users", ch.updateUsers)              //Update User
-	mux.HandleFunc("POST /api/refresh", ch.postCheckRefreshToken) // vaidate refreshtoken
-	mux.HandleFunc("POST /api/revoke", ch.postRevokeRefreshToken) // remove refreshtoken
+	mux.HandleFunc("POST /api/users", ch.postUsers)                        //Create User
+	mux.HandleFunc("POST /api/login", ch.postLogin)                        //Log in + Creates JWT
+	mux.HandleFunc("PUT /api/users", ch.updateUsers)                       //Update User
+	mux.HandleFunc("POST /api/refresh", ch.postCheckRefreshToken)          // validate refreshtoken
+	mux.HandleFunc("POST /api/revoke", ch.postRevokeRefreshToken)          // remove refreshtoken
+	mux.HandleFunc("DELETE /api/chirps/{id}", ch.deleteChrips)             // Deletes chrips
+	mux.HandleFunc("POST /api/polka/webhooks", ch.postPolkaWebHookHandler) //Handle webhook
 	port := "8080"
 
 	server := &http.Server{
