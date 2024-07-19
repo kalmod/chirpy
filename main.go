@@ -51,7 +51,25 @@ func (ch *chirpyHandler) getChirps(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
 
-	allchirps, err := ch.chirpDatabase.GetChirps()
+  query_author_id := r.URL.Query().Get("author_id")
+  sort_value := r.URL.Query().Get("sort")
+  if sort_value == "" { 
+    sort_value = "asc"
+  }
+
+
+  var author_ID int
+  var err error
+  if len(query_author_id) != 0 {
+    author_ID, err = strconv.Atoi(query_author_id)
+    if err != nil {
+      log.Printf("Couldn't parse author id")
+    }
+  } else {
+    author_ID = 0
+  }
+
+	allchirps, err := ch.chirpDatabase.GetChirps(author_ID, sort_value)
 	if err != nil {
 		log.Printf("Couldn't get chirps: %s", err)
 	}

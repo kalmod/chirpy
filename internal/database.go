@@ -16,8 +16,11 @@ import (
 	bcrypt "golang.org/x/crypto/bcrypt"
 )
 
-var GlobalChirpID int = 0
-var GlobalUserID int = 0
+// var GlobalChirpID int = 0
+// var GlobalUserID int = 0
+
+var counter GlobalCounter
+
 
 type DB struct {
 	path string
@@ -68,30 +71,21 @@ func (db *DB) ensureDB() error {
 func (db *DB) loadDB() (DBStructure, error) {
 	// os.readfile  returns text in bytes
 
+  // db.mux.Lock()
+  // defer db.mux.Unlock()
+
 	loadedData := DBStructure{
 		make(map[int]Chirp),
 		make(map[int]User),
 		make(map[string]RefreshTokenInfo),
 	}
 
-	var wg sync.WaitGroup
-	openFile := func() {
-		db.mux.Lock()
 		data, err := os.ReadFile(db.path)
 		if err != nil {
-			wg.Done()
-			return
+			return DBStructure{}, err
 		}
-		defer db.mux.Unlock()
 		json.Unmarshal(data, &loadedData)
 		getNewestID(loadedData)
-		wg.Done()
-		return
-	}
-
-	wg.Add(1)
-	go openFile()
-	wg.Wait()
 
 	// fmt.Println(loadedData)
 	return loadedData, nil
@@ -108,14 +102,14 @@ func getNewestID(loadedData DBStructure) {
 		userSlice = append(userSlice, val)
 	}
 	if len(chirpSlice) != 0 {
-		GlobalChirpID = chirpSlice[len(chirpSlice)-1].ID
+		counter.SetChirpID(chirpSlice[len(chirpSlice)-1].ID)
 	}
 	if len(userSlice) != 0 {
-		GlobalUserID = userSlice[len(userSlice)-1].ID
+		counter.SetUserID(userSlice[len(userSlice)-1].ID)
 	}
 }
 
-func (db *DB) GetChirps() ([]Chirp, error) {
+func (db *DB) GetChirps(author_id int, sortDir string) ([]Chirp, error) {
 
 	loadedDBData, err := db.loadDB()
 	if err != nil {
@@ -124,14 +118,27 @@ func (db *DB) GetChirps() ([]Chirp, error) {
 
 	chirpSlice := []Chirp{}
 	for _, val := range loadedDBData.Chirps {
-		chirpSlice = append(chirpSlice, val)
+    if author_id == 0 {
+      chirpSlice = append(chirpSlice, val)
+    } else {
+      if val.AuthorID == author_id{
+        chirpSlice = append(chirpSlice, val)
+      }
+    }
 	}
-	sort.Slice(chirpSlice, func(i, j int) bool {
-		return chirpSlice[i].ID < chirpSlice[j].ID
-	})
+
+  if sortDir == "asc" {
+    sort.Slice(chirpSlice, func(i, j int) bool {
+      return chirpSlice[i].ID < chirpSlice[j].ID
+      }) // Sorting function | asc
+  } else {
+    sort.Slice(chirpSlice, func(i, j int) bool {
+      return chirpSlice[i].ID > chirpSlice[j].ID
+      }) // Sorting function | desc
+  }
 
 	if len(chirpSlice) != 0 {
-		GlobalChirpID = chirpSlice[len(chirpSlice)-1].ID
+		counter.SetChirpID(chirpSlice[len(chirpSlice)-1].ID)
 	}
 
 	// fmt.Println("CHIRPS: ",chirpSlice)
@@ -153,33 +160,44 @@ func (db *DB) GetChirpByID(id int) (Chirp, error) {
 }
 
 func (db *DB) CreateChirp(body string, userID int) (Chirp, error) {
-	GlobalChirpID++
-	officialChirp := Chirp{ID: GlobalChirpID, Body: body, AuthorID: userID}
+  db.mux.Lock()
+  defer db.mux.Unlock()
 
 	loadedDBData, err := db.loadDB()
 	if err != nil {
 		return Chirp{}, err
 	}
+
+	counter.IncrementChirpID()
+	officialChirp := Chirp{ID: counter.GetChirpID(), Body: body, AuthorID: userID}
+
 	loadedDBData.Chirps[officialChirp.ID] = officialChirp
+
 	err = db.writeDB(loadedDBData)
+	if err != nil {
+		return Chirp{}, err
+	}
 
 	return officialChirp, nil
 }
 
 func (db *DB) CreateUser(password, body string) (User, error) {
-	GlobalUserID++
+  db.mux.Lock()
+  defer db.mux.Unlock()
 
 	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(password), 1)
 	if err != nil {
 		return User{}, err
 	}
 
-	officialUser := User{ID: GlobalUserID, Password: string(hashedPassword), Email: body}
-
 	loadedDBData, err := db.loadDB()
 	if err != nil {
 		return User{}, err
 	}
+
+  counter.IncrementUserID()
+	officialUser := User{ID: counter.GetUserID(), Password: string(hashedPassword), Email: body}
+
 
 	loadedDBData.Users[officialUser.ID] = officialUser
 	err = db.writeDB(loadedDBData)
@@ -191,18 +209,18 @@ func (db *DB) CreateUser(password, body string) (User, error) {
 }
 
 func (db *DB) writeDB(dbstructure DBStructure) error {
+	// db.mux.Lock()
 	j, err := json.Marshal(dbstructure)
 	if err != nil {
 		fmt.Println("mrshl err", j)
 		return err
 	}
 
-	db.mux.Lock()
 	err = os.WriteFile(db.path, j, 0644)
 	if err != nil {
 		return err
 	}
-	defer db.mux.Unlock()
+	// defer db.mux.Unlock()
 
 	return nil
 }
